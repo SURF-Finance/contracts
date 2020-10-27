@@ -105,7 +105,7 @@ contract Whirlpool is Ownable {
         require(tito.surfPoolActive() == true, "no surf pool");
         require(_amount > 0, "no surf");
 
-        if (active != true) {
+        if (active != true || totalStaked == 0) {
             initialSurfReward = initialSurfReward.add(_amount);
         } else {
             totalPendingSurf = totalPendingSurf.add(_amount);

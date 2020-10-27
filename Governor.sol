@@ -26,7 +26,7 @@ contract Governor {
 
     /// @notice The number of votes required in order for a voter to become a proposer
     // function proposalThreshold() public pure returns (uint) { return 100000e18; } // 100,000 = 1% of Comp
-    function proposalThreshold() public view returns (uint) { return 1000e18; } // 1000 SURF
+    function proposalThreshold() public pure returns (uint) { return 1000e18; } // 1000 SURF
 
     /// @notice The maximum number of actions that can be included in a proposal
     function proposalMaxOperations() public pure returns (uint) { return 10; } // 10 actions
