@@ -3,11 +3,13 @@ pragma solidity ^0.6.12;
 
 import './libraries/IUniswapV2Router02.sol';
 import './libraries/IUniswapV2Pair.sol';
+import './libraries/SafeERC20.sol';
 import './libraries/IERC20.sol';
 import './Tito.sol';
 import './Whirlpool.sol';
 
 contract AutoDeposit {
+    using SafeERC20 for IERC20;
     
     IUniswapV2Router02 internal uniswapRouter = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
     Tito internal tito;
@@ -28,6 +30,7 @@ contract AutoDeposit {
         (IERC20 _token, IERC20 _pool, , , , , ) = tito.poolInfo(_pid);
         
         lpReceived = _convertToLP(_token, _pool, msg.value);
+        _pool.safeApprove(address(tito), 0);
         _pool.approve(address(tito), lpReceived);
         tito.depositFor(_pid, msg.sender, lpReceived);
     }
@@ -45,6 +48,7 @@ contract AutoDeposit {
         require(msg.value > 0 && whirlpool.active());
         
         lpReceived = _convertToLP(IERC20(whirlpool.surf()), whirlpool.surfPool(), msg.value);
+        whirlpool.surfPool().safeApprove(address(whirlpool), 0);
         whirlpool.surfPool().approve(address(whirlpool), lpReceived);
         whirlpool.stakeFor(msg.sender, lpReceived);
     }
@@ -69,6 +73,7 @@ contract AutoDeposit {
         bool _isToken0 = _pair.token0() == address(_token);
         uint256 _tokensPerETH = 1e18 * (_isToken0 ? _reserve0 : _reserve1) / (_isToken0 ? _reserve1 : _reserve0);
 
+        _token.safeApprove(address(uniswapRouter), 0);
         if (_tokensPerETH > 1e18 * _tokens / _eth) {
             uint256 _ethValue = 1e18 * _tokens / _tokensPerETH;
             _token.approve(address(uniswapRouter), _tokens);

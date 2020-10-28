@@ -94,11 +94,11 @@ contract Tito is Ownable {
     // The amount of ETH donated to the SURF community by partner projects
     uint256 public donatedETH = 0;
     // Certain partner projects need to donate 25 ETH to the SURF community to get a beach
-    uint256 public minimumDonationAmount = 25 * 10**18;
+    uint256 internal constant minimumDonationAmount = 25 * 10**18;
     // Mapping of addresses that donated ETH on behalf of a partner project
-    mapping(address => address) public donaters;
+    mapping(address => address) internal donaters;
     // Mapping of the size of donations from partner projects
-    mapping(address => uint256) public donations;
+    mapping(address => uint256) internal donations;
     // Approximate number of blocks per year - assumes 13 second blocks
     uint256 internal constant APPROX_BLOCKS_PER_YEAR  = uint256(uint256(365 days) / uint256(13 seconds));
     // The default APR for each pool will be 1,000%
@@ -558,19 +558,21 @@ contract Tito is Ownable {
         if (_pid == 0) {
             pool.lpToken.transfer(address(surf), stakingFeeAmount);
         } else {
+            uint256 ethBalanceBeforeSwap = address(this).balance;
+
             // Remove the liquidity from the pool
             uint256 deadline = block.timestamp + 5 minutes;
+            pool.lpToken.safeApprove(address(uniswapRouter), 0);
             pool.lpToken.approve(address(uniswapRouter), stakingFeeAmount);
             uniswapRouter.removeLiquidityETHSupportingFeeOnTransferTokens(address(pool.token), stakingFeeAmount, 0, 0, address(this), deadline);
 
             // Swap the ERC-20 token for ETH
-            uint256 ethBalanceBeforeSwap = address(this).balance;
-
             uint256 tokensToSwap = pool.token.balanceOf(address(this));
             require(tokensToSwap > 0, "bad token swap");
             address[] memory poolPath = new address[](2);
             poolPath[0] = address(pool.token);
             poolPath[1] = address(weth);
+            pool.token.safeApprove(address(uniswapRouter), 0);
             pool.token.approve(address(uniswapRouter), tokensToSwap);
             uniswapRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokensToSwap, 0, poolPath, address(this), deadline);
 
@@ -749,6 +751,7 @@ contract Tito is Ownable {
         user.staked = 0;
         user.rewardDebt = 0;
 
+        poolInfo[0].lpToken.safeApprove(address(whirlpool), 0);
         poolInfo[0].lpToken.approve(address(whirlpool), amountToMigrate);
         whirlpool.stakeFor(msg.sender, amountToMigrate);
         emit Withdraw(msg.sender, 0, amountToMigrate);
