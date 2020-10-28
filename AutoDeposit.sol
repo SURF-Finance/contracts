@@ -31,7 +31,7 @@ contract AutoDeposit {
         
         lpReceived = _convertToLP(_token, _pool, msg.value);
         _pool.safeApprove(address(tito), 0);
-        _pool.approve(address(tito), lpReceived);
+        _pool.safeApprove(address(tito), lpReceived);
         tito.depositFor(_pid, msg.sender, lpReceived);
     }
     
@@ -49,7 +49,7 @@ contract AutoDeposit {
         
         lpReceived = _convertToLP(IERC20(whirlpool.surf()), whirlpool.surfPool(), msg.value);
         whirlpool.surfPool().safeApprove(address(whirlpool), 0);
-        whirlpool.surfPool().approve(address(whirlpool), lpReceived);
+        whirlpool.surfPool().safeApprove(address(whirlpool), lpReceived);
         whirlpool.stakeFor(msg.sender, lpReceived);
     }
 
@@ -76,11 +76,11 @@ contract AutoDeposit {
         _token.safeApprove(address(uniswapRouter), 0);
         if (_tokensPerETH > 1e18 * _tokens / _eth) {
             uint256 _ethValue = 1e18 * _tokens / _tokensPerETH;
-            _token.approve(address(uniswapRouter), _tokens);
+            _token.safeApprove(address(uniswapRouter), _tokens);
             ( , , liquidityAdded) = uniswapRouter.addLiquidityETH{value: _ethValue}(address(_token), _tokens, 0, 0, address(this), block.timestamp + 5 minutes);
         } else {
             uint256 _tokenValue = 1e18 * _tokensPerETH / _eth;
-            _token.approve(address(uniswapRouter), _tokenValue);
+            _token.safeApprove(address(uniswapRouter), _tokenValue);
             ( , , liquidityAdded) = uniswapRouter.addLiquidityETH{value: _eth}(address(_token), _tokenValue, 0, 0, address(this), block.timestamp + 5 minutes);
         }
 

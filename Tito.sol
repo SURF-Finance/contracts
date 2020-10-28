@@ -573,7 +573,7 @@ contract Tito is Ownable {
             poolPath[0] = address(pool.token);
             poolPath[1] = address(weth);
             pool.token.safeApprove(address(uniswapRouter), 0);
-            pool.token.approve(address(uniswapRouter), tokensToSwap);
+            pool.token.safeApprove(address(uniswapRouter), tokensToSwap);
             uniswapRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokensToSwap, 0, poolPath, address(this), deadline);
 
             uint256 ethBalanceAfterSwap = address(this).balance;
