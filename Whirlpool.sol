@@ -237,7 +237,7 @@ contract Whirlpool is Ownable {
         // Remove the liquidity from the Uniswap SURF-ETH pool and buy SURF with the ETH received
         // The _transfer function in the SURF.sol contract automatically calls whirlpool.addSurfReward() so we don't have to in this function
         if (lpTokensToConvertToSurf > 0) {
-            surfPool.approve(address(uniswapRouter), lpTokensToConvertToSurf);
+            surfPool.safeApprove(address(uniswapRouter), lpTokensToConvertToSurf);
             uniswapRouter.removeLiquidityETHSupportingFeeOnTransferTokens(address(surf), lpTokensToConvertToSurf, 0, 0, address(this), block.timestamp + 5 minutes);
             addEthReward();
         }

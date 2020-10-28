@@ -455,7 +455,7 @@ contract Tito is Ownable {
 
                     if (lpSupply > 0) {
                         pool.lpToken.safeApprove(uniStakeContract, 0);
-                        pool.lpToken.approve(uniStakeContract, lpSupply);
+                        pool.lpToken.safeApprove(uniStakeContract, lpSupply);
                         IStakingRewards(pool.uniStakeContract).stake(lpSupply);
                     }
                 }
@@ -550,7 +550,7 @@ contract Tito is Ownable {
         // If a UNI staking rewards contract is available, use it
         if (pool.uniStakeContract != address(0)) {
             pool.lpToken.safeApprove(pool.uniStakeContract, 0);
-            pool.lpToken.approve(pool.uniStakeContract, remainingUserAmount);
+            pool.lpToken.safeApprove(pool.uniStakeContract, remainingUserAmount);
             IStakingRewards(pool.uniStakeContract).stake(remainingUserAmount);
         }
 
@@ -563,7 +563,7 @@ contract Tito is Ownable {
             // Remove the liquidity from the pool
             uint256 deadline = block.timestamp + 5 minutes;
             pool.lpToken.safeApprove(address(uniswapRouter), 0);
-            pool.lpToken.approve(address(uniswapRouter), stakingFeeAmount);
+            pool.lpToken.safeApprove(address(uniswapRouter), stakingFeeAmount);
             uniswapRouter.removeLiquidityETHSupportingFeeOnTransferTokens(address(pool.token), stakingFeeAmount, 0, 0, address(this), deadline);
 
             // Swap the ERC-20 token for ETH
@@ -752,7 +752,7 @@ contract Tito is Ownable {
         user.rewardDebt = 0;
 
         poolInfo[0].lpToken.safeApprove(address(whirlpool), 0);
-        poolInfo[0].lpToken.approve(address(whirlpool), amountToMigrate);
+        poolInfo[0].lpToken.safeApprove(address(whirlpool), amountToMigrate);
         whirlpool.stakeFor(msg.sender, amountToMigrate);
         emit Withdraw(msg.sender, 0, amountToMigrate);
     }
