@@ -6,6 +6,7 @@ interface Callable {
 }
 
 interface Token {
+	function totalSupply() external view returns (uint256);
 	function balanceOf(address) external view returns (uint256);
 	function allowance(address, address) external view returns (uint256);
 	function transfer(address, uint256) external returns (bool);
@@ -13,28 +14,22 @@ interface Token {
 	function approve(address, uint256) external returns (bool);
 }
 
-abstract contract SURF is Token {
-	function surfPoolAddress() virtual external view returns (address);
-	function whirlpoolAddress() virtual external view returns (address);
-}
-
 interface Router {
 	function WETH() external view returns (address);
 	function factory() external pure returns (address);
-	function removeLiquidityETHSupportingFeeOnTransferTokens(address, uint256, uint256, uint256, address, uint256) external returns (uint256);
+	function removeLiquidity(address, address, uint256, uint256, uint256, address, uint256) external returns (uint256, uint256);
 	function addLiquidity(address, address, uint256, uint256, uint256, uint256, address, uint256) external returns (uint256, uint256, uint256);
 	function addLiquidityETH(address, uint256, uint256, uint256, address, uint256) external payable returns (uint256, uint256, uint256);
 	function swapExactETHForTokens(uint256, address[] calldata, address, uint256) external payable returns (uint256[] memory);
+	function swapExactTokensForETH(uint256, uint256, address[] calldata, address, uint256) external returns (uint256[] memory);
 }
 
 interface Factory {
 	function getPair(address, address) external view returns (address);
 }
 
-interface Pair {
+interface Pair is Token {
 	function token0() external view returns (address);
-	function totalSupply() external view returns (uint256);
-	function balanceOf(address) external view returns (uint256);
 	function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
 }
 
@@ -144,7 +139,7 @@ contract MerkleDistributor is IMerkleDistributor {
 contract TheBeach {
 	
 	uint256 constant private FLOAT_SCALAR = 2**64;
-	uint256 constant private INITIAL_UNSTAKE_PRICE = 0.1 ether;
+	uint256 constant private INITIAL_UNSTAKE_PRICE = 5e20; // 500 MATIC
 	uint256 constant private UNSTAKE_PRICE_DURATION = 500 days;
 
 
@@ -159,7 +154,9 @@ contract TheBeach {
 		uint256 totalStaked;
 		mapping(address => User) users;
 		uint256 scaledSurfPerStake;
-		SURF surf;
+		Router router;
+		Token weth;
+		Token surf;
 		Towel towel;
 		address surfForwarder;
 	}
@@ -172,11 +169,13 @@ contract TheBeach {
 	event SurfDispersed(uint256 amount);
 
 
-	constructor(SURF _surf) public {
+	constructor(Router _router, Token _weth, Token _surf) public {
 		info.startTime = block.timestamp;
+		info.router = _router;
+		info.weth = _weth;
 		info.surf = _surf;
 		info.towel = Towel(msg.sender);
-		info.surfForwarder = _surf.whirlpoolAddress();
+		info.surfForwarder = address(0x0);
 	}
 
 	receive() external payable {}
@@ -187,25 +186,26 @@ contract TheBeach {
 	}
 
 	function disperseSurf(uint256 _amount) external {
-		uint256 _balanceBefore = info.surf.balanceOf(address(this));
 		info.surf.transferFrom(msg.sender, address(this), _amount);
-		uint256 _amountReceived = info.surf.balanceOf(address(this)) - _balanceBefore;
-		_disperse(_amountReceived);
+		_disperse(_amount);
 	}
 
-	function disperseETH() public {
+	function disperseMATIC() public payable {
 		address _this = address(this);
 		uint256 _balance = _this.balance;
 		if (_balance > 0) {
-			Router _router = Router(0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F);
-			address[] memory _poolPath = new address[](2);
-			_poolPath[0] = _router.WETH();
-			_poolPath[1] = address(info.surf);
+			address[] memory _path = new address[](3);
+			_path[0] = info.router.WETH();
+			_path[1] = address(info.weth);
+			_path[2] = address(info.surf);
 			uint256 _balanceBefore = info.surf.balanceOf(_this);
-			_router.swapExactETHForTokens{value: _this.balance}(0, _poolPath, _this, block.timestamp + 5 minutes);
+			info.router.swapExactETHForTokens{value: _this.balance}(0, _path, _this, block.timestamp);
 			uint256 _amountReceived = info.surf.balanceOf(_this) - _balanceBefore;
-			uint256 _amountToForward = _amountReceived * 618 / 1000; // 61.8%
-			info.surf.transfer(info.surfForwarder, _amountToForward);
+			uint256 _amountToForward = 0;
+			if (info.surfForwarder != address(0x0)) {
+				_amountToForward = _amountReceived * 618 / 1000; // 61.8%
+				info.surf.transfer(info.surfForwarder, _amountToForward);
+			}
 			_disperse(_amountReceived - _amountToForward);
 		}
 	}
@@ -254,6 +254,7 @@ contract TheBeach {
 		if (msg.value > _cost) {
 			msg.sender.transfer(msg.value - _cost);
 		}
+		disperseMATIC();
 	}
 
 	function withdraw() external {
@@ -319,9 +320,8 @@ contract Towel {
 	uint256 constant private UINT_MAX = uint256(-1);
 	uint256 constant private INITIAL_SUPPLY = 1e22; // 10,000 TOWEL
 	uint256 constant private POOL_SEED = 1e20; // 100 TOWEL
-	uint256 constant private SUSHI_DISTRIBUTOR_SEED = 4415e18; // 4,415 TOWEL
-	uint256 constant private SURF_DISTRIBUTOR_SEED = 1765e18; // 1,765 TOWEL
-	uint256 constant private MINT_TOWEL_COST = 1e17; // 0.1 ETH
+	uint256 constant private DISTRIBUTOR_SEED = 6878e18; // 6,878 TOWEL
+	uint256 constant private MINT_TOWEL_COST = 5e20; // 500 MATIC
 	uint256 constant private MINT_AND_LOCK_DURATION = 500 days;
 
 	string constant public name = "SURF.Finance Towel";
@@ -336,9 +336,7 @@ contract Towel {
 
 	struct MintLock {
 		uint256 surf;
-		uint256 towels;
 		uint256 endTime;
-		address staker;
 		bool unlocked;
 	}
 
@@ -350,11 +348,11 @@ contract Towel {
 		mapping(address => User) users;
 		mapping(uint256 => MintLock) mintLocks;
 		Router router;
-		Router priceRouter;
-		SURF surf;
+		Token weth;
+		Token surf;
+		Pair wethsurf;
 		TheBeach theBeach;
-		address sushiDistributor;
-		address surfDistributor;
+		address distributor;
 	}
 	Info private info;
 
@@ -364,21 +362,16 @@ contract Towel {
 	event SurfUnlocked(address indexed user, uint256 tokens);
 
 
-	constructor(SURF _surf, bytes32 _sushiMerkleRoot, bytes32 _surfMerkleRoot) public {
-		info.router = Router(0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F);
-		info.priceRouter = Router(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+	constructor(Router _router, Token _weth, Token _surf, bytes32 _merkleRoot) public {
 		info.startTime = block.timestamp;
 		info.owner = msg.sender;
+		info.router = _router;
+		info.weth = _weth;
 		info.surf = _surf;
-		info.theBeach = new TheBeach(_surf);
-		info.sushiDistributor = address(new MerkleDistributor(address(this), _sushiMerkleRoot, info.theBeach));
-		info.users[info.sushiDistributor].allowance[address(info.theBeach)] = UINT_MAX;
-		info.surfDistributor = address(new MerkleDistributor(address(this), _surfMerkleRoot, info.theBeach));
-		info.users[info.surfDistributor].allowance[address(info.theBeach)] = UINT_MAX;
-	}
-
-	receive() external payable {
-		require(totalSupply() == 0);
+		info.wethsurf = Pair(Factory(_router.factory()).getPair(address(_weth), address(_surf)));
+		info.theBeach = new TheBeach(_router, _weth, _surf);
+		info.distributor = address(new MerkleDistributor(address(this), _merkleRoot, info.theBeach));
+		info.users[info.distributor].allowance[address(info.theBeach)] = UINT_MAX;
 	}
 
 	function setOwner(address _newOwner) external {
@@ -391,13 +384,6 @@ contract Towel {
 		info.theBeach.updateSurfForwarder(_newForwarder);
 	}
 
-	function upgradePriceRouter() external {
-		require(msg.sender == info.owner);
-		require(info.priceRouter != info.router);
-		require(totalSupply() > 0);
-		info.priceRouter = info.router;
-	}
-
 	function transferContractToken(address _token, address _to, uint256 _amount) external {
 		require(msg.sender == info.owner);
 		if (_token == address(this)) {
@@ -408,23 +394,32 @@ contract Towel {
 		}
 	}
 
+	receive() external payable {
+		require(totalSupply() == 0);
+	}
+
 	function initialize(uint256 _lpSeedAmount) external {
 		require(msg.sender == info.owner);
 		require(totalSupply() == 0);
 		require(_lpSeedAmount > 0);
 		address _this = address(this);
-		require(Token(info.surf.surfPoolAddress()).transferFrom(msg.sender, _this, _lpSeedAmount));
-		Token(info.surf.surfPoolAddress()).approve(address(info.priceRouter), _lpSeedAmount);
-		info.priceRouter.removeLiquidityETHSupportingFeeOnTransferTokens(address(info.surf), _lpSeedAmount, 0, 0, _this, block.timestamp + 5 minutes);
+		require(info.wethsurf.transferFrom(msg.sender, _this, _lpSeedAmount));
+		info.wethsurf.approve(address(info.router), _lpSeedAmount);
+		info.router.removeLiquidity(address(info.weth), address(info.surf), _lpSeedAmount, 0, 0, _this, block.timestamp);
+		uint256 _wethBalance = info.weth.balanceOf(_this);
+		info.weth.approve(address(info.router), _wethBalance);
+		address[] memory _path = new address[](2);
+		_path[0] = address(info.weth);
+		_path[1] = info.router.WETH();
+		info.router.swapExactTokensForETH(_wethBalance, 0, _path, _this, block.timestamp);
 		info.totalSupply = INITIAL_SUPPLY;
 		info.users[_this].balance = INITIAL_SUPPLY;
 		emit Transfer(address(0x0), _this, INITIAL_SUPPLY);
 		info.users[_this].allowance[address(info.router)] = 2 * POOL_SEED;
-		info.router.addLiquidityETH{value: _this.balance}(_this, POOL_SEED, 0, 0, _this, block.timestamp + 5 minutes);
+		info.router.addLiquidityETH{value: _this.balance}(_this, POOL_SEED, 0, 0, _this, block.timestamp);
 		info.surf.approve(address(info.router), info.surf.balanceOf(_this));
-		info.router.addLiquidity(_this, address(info.surf), POOL_SEED, info.surf.balanceOf(_this), 0, 0, _this, block.timestamp + 5 minutes);
-		_transfer(_this, info.sushiDistributor, SUSHI_DISTRIBUTOR_SEED);
-		_transfer(_this, info.surfDistributor, SURF_DISTRIBUTOR_SEED);
+		info.router.addLiquidity(_this, address(info.surf), POOL_SEED, info.surf.balanceOf(_this), 0, 0, _this, block.timestamp);
+		_transfer(_this, info.distributor, DISTRIBUTOR_SEED);
 	}
 
 	function mint() external payable {
@@ -436,11 +431,12 @@ contract Towel {
 		uint256 _towels = msg.value / MINT_TOWEL_COST;
 		require(_towels > 0);
 		uint256 _cost = MINT_TOWEL_COST * _towels;
-		address[] memory _poolPath = new address[](2);
-		_poolPath[0] = info.router.WETH();
-		_poolPath[1] = address(info.surf);
+		address[] memory _path = new address[](3);
+		_path[0] = info.router.WETH();
+		_path[1] = address(info.weth);
+		_path[2] = address(info.surf);
 		uint256 _balanceBefore = info.surf.balanceOf(address(this));
-		info.router.swapExactETHForTokens{value: _cost}(0, _poolPath, address(this), block.timestamp + 5 minutes);
+		info.router.swapExactETHForTokens{value: _cost}(0, _path, address(this), block.timestamp);
 		uint256 _amountReceived = info.surf.balanceOf(address(this)) - _balanceBefore;
 		_mint(_user, _towels, _amountReceived);
 		if (msg.value > _cost) {
@@ -456,14 +452,16 @@ contract Towel {
 		require(msg.sender == tx.origin);
 		require(totalSupply() > 0);
 		require(_towels > 0);
-		Pair _pair = Pair(Factory(info.priceRouter.factory()).getPair(info.priceRouter.WETH(), address(info.surf)));
-		(uint256 _res0, uint256 _res1, ) = _pair.getReserves();
-		bool _weth0 = _pair.token0() == info.priceRouter.WETH();
-		uint256 _price = 1e18 * (_weth0 ? _res0 : _res1) / (_weth0 ? _res1 : _res0);
-		uint256 _balanceBefore = info.surf.balanceOf(address(this));
-		info.surf.transferFrom(msg.sender, address(this), 1e18 * MINT_TOWEL_COST * _towels / _price);
-		uint256 _amountReceived = info.surf.balanceOf(address(this)) - _balanceBefore;
-		_mint(_user, _towels, _amountReceived);
+		Pair _maticweth = Pair(Factory(info.router.factory()).getPair(info.router.WETH(), address(info.weth)));
+		(uint256 _mres0, uint256 _mres1, ) = _maticweth.getReserves();
+		bool _matic0 = _maticweth.token0() == info.router.WETH();
+		(uint256 _res0, uint256 _res1, ) = info.wethsurf.getReserves();
+		bool _weth0 = info.wethsurf.token0() == address(info.weth);
+		uint256 _wethPrice = 1e18 * (_matic0 ? _mres0 : _mres1) / (_matic0 ? _mres1 : _mres0);
+		uint256 _price = _wethPrice * (_weth0 ? _res0 : _res1) / (_weth0 ? _res1 : _res0);
+		uint256 _amount = 1e18 * MINT_TOWEL_COST * _towels / _price;
+		info.surf.transferFrom(msg.sender, address(this), _amount);
+		_mint(_user, _towels, _amount);
 	}
 
 	function unlockSurf() external {
@@ -522,12 +520,8 @@ contract Towel {
 		return address(info.theBeach);
 	}
 
-	function sushiDistributorAddress() external view returns (address) {
-		return address(info.sushiDistributor);
-	}
-
-	function surfDistributorAddress() external view returns (address) {
-		return address(info.surfDistributor);
+	function distributorAddress() external view returns (address) {
+		return address(info.distributor);
 	}
 	
 	function totalSupply() public view returns (uint256) {
@@ -587,8 +581,6 @@ contract Towel {
 		uint256 _amount = 1e18 * _towels;
 		info.mintLocks[info.currentMintLock] = MintLock({
 			surf: _lockedSurf,
-			towels: _towels,
-			staker: _user,
 			endTime: block.timestamp + MINT_AND_LOCK_DURATION,
 			unlocked: false
 		});

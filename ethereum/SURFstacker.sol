@@ -9,16 +9,15 @@ interface Router {
 interface SURF {
 	function whirlpoolAddress() external view returns (address);
 	function balanceOf(address) external view returns (uint256);
+	function approve(address, uint256) external returns (bool);
 	function transfer(address, uint256) external returns (bool);
 	function transferFrom(address, address, uint256) external returns (bool);
-	function transferAndCall(address, uint256, bytes calldata) external returns (bool);
 }
 
 interface SURF3d {
 	function whirlpoolManager() external view returns (address);
-	function balanceOf(address) external view returns (uint256);
 	function dividendsOf(address) external view returns (uint256);
-	function transfer(address, uint256) external returns (bool);
+	function buyFor(uint256, address) external returns (uint256);
 	function withdraw() external returns (uint256);
 }
 
@@ -27,35 +26,26 @@ interface Whirlpool {
 	function claim() external;
 }
 
-contract SURFstackerPLUS {
+contract SURFstacker {
 
 	uint256 constant private FLOAT_SCALAR = 2**64;
 	uint256 constant private MIN_DEPOSIT = 1e20; // 100 SURF min
 	uint256 constant private MAX_DEPOSIT = 1e22; // 10,000 SURF max
-	uint256 constant private RETURN = 125; // deposit + 25% extra repaid
-	uint256 constant private S3D_BUY = 10; // 10% of deposits buy S3D
-	uint256 constant private S3D_TO_WM = 25; // 25% of each S3D buy goes to the whirlpool manager
-	uint256 constant private DIVIDENDS = 10; // 10% of deposits are spread as dividends
-	uint256 constant private DIVIDENDS_TO_QUEUE = 50; // 50% of external dividends claimed pay off the queue
+	uint256 constant private RETURN = 115; // deposit + 15% extra repaid
+	uint256 constant private S3D_BUY = 382; // 38.2% of deposits buy S3D for the WhirlpoolManager contract
 
 	struct Deposit {
 		address user;
 		uint96 timestamp;
-		uint128 deposited;
+		uint128 deposit;
 		uint128 paid;
-	}
-
-	struct User {
-		uint256 deposited;
-		int256 scaledPayout;
 	}
 
 	struct Info {
 		Deposit[] queue;
 		uint256 paidToIndex;
 		uint256 totalDeposited;
-		mapping(address => User) users;
-		uint256 scaledSurfPerShare;
+		mapping(address => uint256) deposits;
 		uint256 openingBlock;
 		Router router;
 		SURF surf;
@@ -68,8 +58,6 @@ contract SURFstackerPLUS {
 	event Deposited(uint256 indexed index, address indexed user, uint256 amount);
 	event Paid(uint256 indexed index, address indexed user, uint256 amount);
 	event PaidOff(uint256 indexed index, address indexed user, uint256 totalPaid);
-	event Withdraw(address indexed user, uint256 amount);
-	event Dispersed(uint256 amount);
 
 
 	constructor(address _surf, address _s3d, uint256 _openingBlock) public {
@@ -112,14 +100,6 @@ contract SURFstackerPLUS {
 		return true;
 	}
 
-	function withdraw() external {
-		uint256 _dividends = dividendsOf(msg.sender);
-		require(_dividends > 0);
-		info.users[msg.sender].scaledPayout += int256(_dividends * FLOAT_SCALAR);
-		info.surf.transfer(msg.sender, _dividends);
-		emit Withdraw(msg.sender, _dividends);
-	}
-
 	function processDividends() external {
 		uint256 _balanceBefore = info.surf.balanceOf(address(this));
 		if (info.s3d.dividendsOf(address(this)) > 0) {
@@ -131,18 +111,12 @@ contract SURFstackerPLUS {
 		}
 		uint256 _amountReceived = info.surf.balanceOf(address(this)) - _balanceBefore;
 		if (_amountReceived > 0) {
-			uint256 _amountToProcess = DIVIDENDS_TO_QUEUE * _amountReceived / 100;
-			_process(_amountToProcess);
-			_disperse(_amountReceived - _amountToProcess);
+			_process(_amountReceived);
 		}
 	}
 
 
-	function dividendsOf(address _user) public view returns (uint256) {
-		return uint256(int256(info.scaledSurfPerShare * info.users[_user].deposited) - info.users[_user].scaledPayout) / FLOAT_SCALAR;
-	}
-
-	function allInfoFor(address _user) external view returns (uint256 totalDeposits, uint256 paidToIndex, uint256 totalDeposited, uint256 openingBlock, uint256 currentBlock, uint256 userETH, uint256 userSURF, uint256 userDeposited, uint256 userDividends) {
+	function allInfoFor(address _user) external view returns (uint256 totalDeposits, uint256 paidToIndex, uint256 totalDeposited, uint256 openingBlock, uint256 currentBlock, uint256 userETH, uint256 userSURF, uint256 userDeposit) {
 		totalDeposits = info.queue.length;
 		paidToIndex = info.paidToIndex;
 		totalDeposited = info.totalDeposited;
@@ -150,33 +124,32 @@ contract SURFstackerPLUS {
 		currentBlock = block.number;
 		userETH = _user.balance;
 		userSURF = info.surf.balanceOf(_user);
-		userDeposited = info.users[_user].deposited;
-		userDividends = dividendsOf(_user);
+		userDeposit = info.deposits[_user];
 	}
 
-	function getDeposit(uint256 _index) public view returns (address user, uint256 timestamp, uint256 deposited, uint256 paid, uint256 remaining) {
+	function getDeposit(uint256 _index) public view returns (address user, uint256 timestamp, uint256 depositAmount, uint256 paid, uint256 remaining) {
 		require(_index < info.queue.length);
 		Deposit memory _dep = info.queue[_index];
 		user = _dep.user;
 		timestamp = _dep.timestamp;
-		deposited = _dep.deposited;
+		depositAmount = _dep.deposit;
 		paid = _dep.paid;
-		remaining = RETURN * deposited / 100 - paid;
+		remaining = RETURN * depositAmount / 100 - paid;
 	}
 
-	function getDeposits(uint256[] memory _indexes) public view returns (address[] memory users, uint256[] memory timestamps, uint256[] memory depositeds, uint256[] memory paids, uint256[] memory remainings) {
+	function getDeposits(uint256[] memory _indexes) public view returns (address[] memory users, uint256[] memory timestamps, uint256[] memory deposits, uint256[] memory paids, uint256[] memory remainings) {
 		uint256 _length = _indexes.length;
 		users = new address[](_length);
 		timestamps = new uint256[](_length);
-		depositeds = new uint256[](_length);
+		deposits = new uint256[](_length);
 		paids = new uint256[](_length);
 		remainings = new uint256[](_length);
 		for (uint256 i = 0; i < _length; i++) {
-			(users[i], timestamps[i], depositeds[i], paids[i], remainings[i]) = getDeposit(_indexes[i]);
+			(users[i], timestamps[i], deposits[i], paids[i], remainings[i]) = getDeposit(_indexes[i]);
 		}
 	}
 
-	function getDepositsTable(uint256 _limit, uint256 _page, bool _isAsc, bool _onlyUnpaid) external view returns (uint256[] memory indexes, address[] memory users, uint256[] memory timestamps, uint256[] memory depositeds, uint256[] memory paids, uint256[] memory remainings, uint256 totalDeposits, uint256 totalPages) {
+	function getDepositsTable(uint256 _limit, uint256 _page, bool _isAsc, bool _onlyUnpaid) external view returns (uint256[] memory indexes, address[] memory users, uint256[] memory timestamps, uint256[] memory deposits, uint256[] memory paids, uint256[] memory remainings, uint256 totalDeposits, uint256 totalPages) {
 		require(_limit > 0);
 		totalDeposits = info.queue.length - (_onlyUnpaid ? info.paidToIndex : 0);
 
@@ -197,7 +170,7 @@ contract SURFstackerPLUS {
 			totalPages = 0;
 			indexes = new uint256[](0);
 		}
-		(users, timestamps, depositeds, paids, remainings) = getDeposits(indexes);
+		(users, timestamps, deposits, paids, remainings) = getDeposits(indexes);
 	}
 
 
@@ -212,36 +185,29 @@ contract SURFstackerPLUS {
 	}
 
 	function _deposit(uint256 _amount, address _user) internal {
-		require(_user != address(0x0));
 		require(block.number >= info.openingBlock && _amount >= MIN_DEPOSIT && _amount <= MAX_DEPOSIT);
 
 		Deposit memory _newDeposit = Deposit({
 			user: _user,
 			timestamp: uint96(block.timestamp),
-			deposited: uint128(_amount),
+			deposit: uint128(_amount),
 			paid: 0
 		});
 		info.queue.push(_newDeposit);
 		info.totalDeposited += _amount;
-		info.users[_user].deposited += _amount;
-		info.users[_user].scaledPayout += int256(_amount * info.scaledSurfPerShare);
+		info.deposits[_user] += _amount;
 		emit Deposited(info.queue.length - 1, _user, _amount);
 
-		uint256 _s3dBuyAmount = S3D_BUY * _amount / 100;
+		uint256 _s3dBuyAmount = S3D_BUY * _amount / 1000;
 		_purchaseS3D(_s3dBuyAmount);
 
-		uint256 _dividendsAmount = DIVIDENDS * _amount / 100;
-		_disperse(_dividendsAmount);
-
-		uint256 _amountPayable = _amount - _s3dBuyAmount - _dividendsAmount;
+		uint256 _amountPayable = _amount - _s3dBuyAmount;
 		_process(_amountPayable);
 	}
 
 	function _purchaseS3D(uint256 _amount) internal {
-		uint256 _balanceBefore = info.s3d.balanceOf(address(this));
-		info.surf.transferAndCall(address(info.s3d), _amount, new bytes(0));
-		uint256 _s3dReceived = info.s3d.balanceOf(address(this)) - _balanceBefore;
-		info.s3d.transfer(info.s3d.whirlpoolManager(), S3D_TO_WM * _s3dReceived / 100);
+		info.surf.approve(address(info.s3d), _amount);
+		info.s3d.buyFor(_amount, info.s3d.whirlpoolManager());
 	}
 
 	function _process(uint256 _amount) internal {
@@ -253,7 +219,7 @@ contract SURFstackerPLUS {
 			} else {
 				Deposit storage _currentDeposit = info.queue[_currentIndex];
 				uint256 _amountPayable = _amount;
-				uint256 _totalPayable = RETURN * _currentDeposit.deposited / 100;
+				uint256 _totalPayable = RETURN * _currentDeposit.deposit / 100;
 				uint256 _amountRemaining = _totalPayable - _currentDeposit.paid;
 				if (_amountRemaining <= _amountPayable) {
 					_amountPayable = _amountRemaining;
@@ -266,10 +232,5 @@ contract SURFstackerPLUS {
 				_amount -= _amountPayable;
 			}
 		}
-	}
-
-	function _disperse(uint256 _amount) internal {
-		info.scaledSurfPerShare += _amount * FLOAT_SCALAR / info.totalDeposited;
-		emit Dispersed(_amount);
 	}
 }
